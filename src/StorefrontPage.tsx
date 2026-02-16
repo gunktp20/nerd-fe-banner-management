@@ -176,16 +176,32 @@ export default function StorefrontPage() {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
+                    <picture>
+                      {data.banners[currentBanner].mobile_image_url && (
+                        <source
+                          media="(max-width: 768px)"
+                          srcSet={data.banners[currentBanner].mobile_image_url!}
+                        />
+                      )}
+                      <img
+                        src={data.banners[currentBanner].desktop_image_url}
+                        alt={data.banners[currentBanner].title || `Banner ${currentBanner + 1}`}
+                      />
+                    </picture>
+                  </a>
+                ) : (
+                  <picture>
+                    {data.banners[currentBanner].mobile_image_url && (
+                      <source
+                        media="(max-width: 768px)"
+                        srcSet={data.banners[currentBanner].mobile_image_url!}
+                      />
+                    )}
                     <img
                       src={data.banners[currentBanner].desktop_image_url}
                       alt={data.banners[currentBanner].title || `Banner ${currentBanner + 1}`}
                     />
-                  </a>
-                ) : (
-                  <img
-                    src={data.banners[currentBanner].desktop_image_url}
-                    alt={data.banners[currentBanner].title || `Banner ${currentBanner + 1}`}
-                  />
+                  </picture>
                 )}
               </div>
               {data.banners.length > 1 && (
