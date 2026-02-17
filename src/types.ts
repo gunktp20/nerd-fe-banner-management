@@ -34,3 +34,49 @@ export interface BannerItem {
   removeMobileImage: boolean
   hasExistingMobile: boolean
 }
+
+// Branding
+export interface ColorPreset {
+  name: string
+  hex: string
+}
+
+export interface FontPreset {
+  name: string
+  value: string
+}
+
+export interface BrandingOptions {
+  primary_colors: ColorPreset[]
+  secondary_colors: ColorPreset[]
+  fonts: FontPreset[]
+}
+
+export interface BrandingTheme {
+  id: string
+  business_profile_id: string
+  title: string | null
+  primary_color: string | null
+  secondary_color: string | null
+  font_family: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface BrandingFavicon {
+  id: string
+  business_profile_id: string
+  file_name: string
+  file_path: string
+  file_size: number
+  mime_type: string
+  original_name: string
+  url: string
+  created_at: string
+  updated_at: string
+}
+
+export interface BrandingData {
+  theme: BrandingTheme | null
+  favicon: BrandingFavicon | null
+}

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import TokenPage from './TokenPage'
 import BannerPage from './BannerPage'
+import BrandingPage from './BrandingPage'
 import StorefrontPage from './StorefrontPage'
 
-type Page = 'banners' | 'storefront'
+type Page = 'banners' | 'branding' | 'storefront'
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('cms_token') || '')
@@ -35,6 +36,12 @@ export default function App() {
               Banner Management
             </button>
             <button
+              className={`nav-tab ${page === 'branding' ? 'active' : ''}`}
+              onClick={() => setPage('branding')}
+            >
+              Branding
+            </button>
+            <button
               className={`nav-tab ${page === 'storefront' ? 'active' : ''}`}
               onClick={() => setPage('storefront')}
             >
@@ -48,6 +55,7 @@ export default function App() {
       </nav>
       <div className="page-content">
         {page === 'banners' && <BannerPage token={token} onLogout={handleLogout} />}
+        {page === 'branding' && <BrandingPage token={token} onLogout={handleLogout} />}
         {page === 'storefront' && <StorefrontPage />}
       </div>
     </div>
