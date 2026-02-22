@@ -35,7 +35,6 @@ export interface BannerItem {
   hasExistingMobile: boolean
 }
 
-// Banner Footer
 export interface BannerFooterResponse {
   id: string
   business_profile_id: string
@@ -75,7 +74,6 @@ export interface BannerFooterItem {
   hasExistingMobile: boolean
 }
 
-// Branding
 export interface ColorPreset {
   name: string
   hex: string
@@ -121,7 +119,6 @@ export interface BrandingData {
   favicon: BrandingFavicon | null
 }
 
-// Business Info
 export interface BusinessInfoResponse {
   id: string
   business_profile_id: string
@@ -134,7 +131,6 @@ export interface BusinessInfoResponse {
   updated_at: string
 }
 
-// Business Logo
 export interface BusinessLogoResponse {
   id: string
   business_profile_id: string
@@ -144,7 +140,28 @@ export interface BusinessLogoResponse {
   updated_at: string
 }
 
-// Subdomain
+export interface SEOResponse {
+  id: string
+  business_profile_id: string
+  title: string
+  description: string | null
+  image_url: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LineContactResponse {
+  enabled: boolean
+  line_url: string
+  add_friend_url: string
+  qr_code_url: string
+}
+
+export interface FacebookPageResponse {
+  enabled: boolean
+  page_url: string
+}
+
 export interface SubdomainResponse {
   is_configured: boolean
   base_domain: string
@@ -152,12 +169,6 @@ export interface SubdomainResponse {
   full_url: string
 }
 
-export interface SubdomainAvailability {
-  subdomain: string
-  available: boolean
-}
-
-// Custom Domain
 export interface DomainResponse {
   id: string
   business_profile_id: string
@@ -167,12 +178,15 @@ export interface DomainResponse {
   updated_at: string
 }
 
-export interface DomainListResponse {
-  data: DomainResponse[]
-  total: number
-  limit: number
-  page: number
-  total_pages: number
-  has_next: boolean
-  has_previous: boolean
+export interface DraftResponse {
+  logo: BusinessLogoResponse | null
+  branding: BrandingData | null
+  info: BusinessInfoResponse | null
+  banners: BannerResponse[]
+  banner_footers: BannerFooterResponse[]
+  seo: SEOResponse | null
+  line_contact: LineContactResponse | null
+  facebook_page: FacebookPageResponse | null
+  subdomain: SubdomainResponse | null
+  domains: DomainResponse[]
 }
