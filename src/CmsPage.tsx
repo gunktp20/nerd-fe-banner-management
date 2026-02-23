@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { fetchBrandingOptions, fetchDraft, saveDraft } from './api'
+import { fetchBrandingOptions, fetchDraft, saveDraft, publishCMS, saveSubdomain, createDomain, updateDomain, deleteDomain, ApiError } from './api'
 import type {
   BannerItem, BannerResponse, BannerFooterItem, BannerFooterResponse,
-  BrandingOptions, DraftResponse,
+  BrandingOptions, SaveDraftResponse,
 } from './types'
 
 interface Props {
@@ -12,8 +12,24 @@ interface Props {
 
 type SectionKey =
   | 'banners' | 'footer' | 'logo' | 'favicon'
-  | 'colors' | 'font' | 'seo' | 'contact'
-  | 'info' | 'subdomain' | 'domains'
+  | 'colors' | 'font' | 'seo' | 'contact' | 'info'
+  | 'subdomain' | 'domains'
+
+// Maps each SaveDraftResponse field → sidebar sections it affects + Thai label for toast
+const SAVE_RESULT_SECTIONS: Array<{
+  key: keyof SaveDraftResponse
+  sections: SectionKey[]
+  label: string
+}> = [
+  { key: 'logo',          sections: ['logo'],                        label: 'โลโก้' },
+  { key: 'branding',      sections: ['favicon', 'colors', 'font'],   label: 'สี/Font/Favicon' },
+  { key: 'info',          sections: ['info'],                        label: 'ข้อมูลบริษัท' },
+  { key: 'banners',       sections: ['banners'],                     label: 'แบนเนอร์' },
+  { key: 'banner_footers',sections: ['footer'],                      label: 'แบนเนอร์ฟุตเตอร์' },
+  { key: 'seo',           sections: ['seo'],                         label: 'SEO' },
+  { key: 'line_contact',  sections: ['contact'],                     label: 'LINE' },
+  { key: 'facebook_page', sections: ['contact'],                     label: 'Facebook' },
+]
 
 const SECTION_LABELS: Record<SectionKey, string> = {
   banners: 'อัปโหลดแบนเนอร์',
@@ -34,19 +50,30 @@ const SECTION_ORDER: SectionKey[] = [
   'seo', 'contact', 'info', 'subdomain', 'domains',
 ]
 
+const REQUIRED_SECTIONS: Partial<Record<SectionKey, true>> = {
+  logo: true,
+  banners: true,
+  info: true,
+  subdomain: true,
+}
+
 export default function CmsPage({ token, onLogout }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [publishing, setPublishing] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error' | ''; text: string }>({ type: '', text: '' })
   const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
     banners: false, footer: false, logo: false, favicon: false,
     colors: false, font: false, seo: false, contact: false,
     info: false, subdomain: false, domains: false,
   })
+  const [sectionErrors, setSectionErrors] = useState<Partial<Record<SectionKey, string>>>({})
+
 
   // --- Logo ---
   const [logoPreview, setLogoPreview] = useState<string | null>(null)
   const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [removeLogo, setRemoveLogo] = useState(false)
   const logoInputRef = useRef<HTMLInputElement>(null)
 
   // --- Info ---
@@ -95,22 +122,26 @@ export default function CmsPage({ token, onLogout }: Props) {
   const [fbEnabled, setFbEnabled] = useState(false)
   const [fbOriginal, setFbOriginal] = useState({ url: '', enabled: false })
 
-  // --- Subdomain ---
-  const [subdomainValue, setSubdomainValue] = useState('')
-  const [subdomainOriginal, setSubdomainOriginal] = useState('')
 
-  // --- Custom Domains ---
-  interface DomainItem { id?: string; domain_name: string; is_active: boolean; isNew?: boolean }
+  // --- Subdomain (standalone save) ---
+  const [subdomainValue, setSubdomainValue] = useState('')
+  const [subdomainFullUrl, setSubdomainFullUrl] = useState('')
+  const [subdomainBaseDomain, setSubdomainBaseDomain] = useState('')
+  const [subdomainSaving, setSubdomainSaving] = useState(false)
+
+  // --- Custom Domains (standalone CRUD) ---
+  interface DomainItem { id: string; domain_name: string; is_active: boolean }
   const [domains, setDomains] = useState<DomainItem[]>([])
-  const [domainsOriginal, setDomainsOriginal] = useState<DomainItem[]>([])
-  const [deletedDomainIds, setDeletedDomainIds] = useState<string[]>([])
-  const [domainsDirty, setDomainsDirty] = useState(false)
+  const [newDomainName, setNewDomainName] = useState('')
+  const [domainActionId, setDomainActionId] = useState<string | null>(null)
+  const [editingDomainId, setEditingDomainId] = useState<string | null>(null)
+  const [editingDomainName, setEditingDomainName] = useState('')
 
   // --- Preview banner rotation ---
   const [previewBannerIndex, setPreviewBannerIndex] = useState(0)
 
   // --- Dirty computation ---
-  const logoDirty = logoFile !== null
+  const logoDirty = logoFile !== null || removeLogo
   const infoDirty = JSON.stringify(infoForm) !== JSON.stringify(infoOriginal)
   const brandingDirty =
     title !== brandingOriginal.title ||
@@ -125,8 +156,7 @@ export default function CmsPage({ token, onLogout }: Props) {
   const contactDirty =
     lineUrl !== lineOriginal.url || lineEnabled !== lineOriginal.enabled ||
     fbUrl !== fbOriginal.url || fbEnabled !== fbOriginal.enabled
-  const subdomainDirty = subdomainValue !== subdomainOriginal
-  const anyDirty = logoDirty || infoDirty || brandingDirty || bannersDirty || footerDirty || seoDirty || contactDirty || subdomainDirty || domainsDirty
+  const anyDirty = logoDirty || infoDirty || brandingDirty || bannersDirty || footerDirty || seoDirty || contactDirty
 
   // Map dirty state per section
   const sectionDirty: Record<SectionKey, boolean> = {
@@ -139,8 +169,23 @@ export default function CmsPage({ token, onLogout }: Props) {
     seo: seoDirty,
     contact: contactDirty,
     info: infoDirty,
-    subdomain: subdomainDirty,
-    domains: domainsDirty,
+    subdomain: false,
+    domains: false,
+  }
+
+  // Whether a section has data (for checkmark indicator)
+  const sectionComplete: Record<SectionKey, boolean> = {
+    banners: banners.length > 0,
+    footer: bannerFooter !== null,
+    logo: logoPreview !== null,
+    favicon: faviconPreview !== null && !removeFavicon,
+    colors: primaryColor !== null,
+    font: fontFamily !== null,
+    seo: seoTitle !== '',
+    contact: (lineUrl !== '' && lineEnabled) || (fbUrl !== '' && fbEnabled),
+    info: infoForm.company_name !== '',
+    subdomain: subdomainValue !== '',
+    domains: domains.length > 0,
   }
 
   useEffect(() => { loadAll() }, [])
@@ -163,11 +208,12 @@ export default function CmsPage({ token, onLogout }: Props) {
         fetchDraft(token),
         fetchBrandingOptions().catch(() => null),
       ])
-      const d = draft as DraftResponse
+      const d = draft
 
       // Logo
       setLogoPreview(d.logo?.url || null)
       setLogoFile(null)
+      setRemoveLogo(false)
 
       // Info
       const infoData = {
@@ -253,17 +299,18 @@ export default function CmsPage({ token, onLogout }: Props) {
 
       // Subdomain
       setSubdomainValue(d.subdomain?.subdomain || '')
-      setSubdomainOriginal(d.subdomain?.subdomain || '')
+      setSubdomainFullUrl(d.subdomain?.full_url || '')
+      setSubdomainBaseDomain(d.subdomain?.base_domain || '')
 
       // Custom Domains
-      const domItems: DomainItem[] = (d.domains || []).map(dm => ({
-        id: dm.id, domain_name: dm.domain_name, is_active: dm.is_active,
-      }))
-      setDomains(domItems)
-      setDomainsOriginal(domItems.map(dm => ({ ...dm })))
-      setDeletedDomainIds([])
-      setDomainsDirty(false)
+      setDomains((d.domains || []).map((dom: { id: string; domain_name: string; is_active: boolean }) => ({
+        id: dom.id,
+        domain_name: dom.domain_name,
+        is_active: dom.is_active,
+      })))
+
       setPreviewBannerIndex(0)
+      setSectionErrors({})
     } catch (err) {
       if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
       setMessage({ type: 'error', text: 'ไม่สามารถโหลดข้อมูลได้' })
@@ -278,26 +325,31 @@ export default function CmsPage({ token, onLogout }: Props) {
   }
 
   // ========== Save Draft ==========
-  const handleSaveDraft = async () => {
-    if (!anyDirty) { setMessage({ type: 'error', text: 'ไม่มีการเปลี่ยนแปลง' }); return }
 
+  // Core save logic — returns true if all sections saved ok, false if validation failed,
+  // section errors occurred, or API threw. Does NOT set saving/publishing state.
+  const runSaveDraft = async (): Promise<boolean> => {
     if (bannersDirty) {
       for (let i = 0; i < banners.length; i++) {
         if (!banners[i].id && !banners[i].desktopFile) {
-          setMessage({ type: 'error', text: `แบนเนอร์ #${i + 1}: ต้องเพิ่มรูป Desktop สำหรับแบนเนอร์ใหม่` }); return
+          setMessage({ type: 'error', text: `แบนเนอร์ #${i + 1}: ต้องเพิ่มรูป Desktop สำหรับแบนเนอร์ใหม่` })
+          return false
         }
       }
     }
     if (footerDirty && bannerFooter && !bannerFooter.id && !bannerFooter.desktopFile) {
-      setMessage({ type: 'error', text: 'แบนเนอร์ท้าย: ต้องเพิ่มรูป Desktop สำหรับรายการใหม่' }); return
+      setMessage({ type: 'error', text: 'แบนเนอร์ท้าย: ต้องเพิ่มรูป Desktop สำหรับรายการใหม่' })
+      return false
     }
 
-    setSaving(true)
-    setMessage({ type: '', text: '' })
     const formData = new FormData()
 
     // Logo
-    if (logoDirty && logoFile) formData.append('logo', logoFile)
+    if (removeLogo) {
+      formData.append('remove_logo', 'true')
+    } else if (logoDirty && logoFile) {
+      formData.append('logo', logoFile)
+    }
 
     // Branding
     if (brandingDirty) {
@@ -383,40 +435,46 @@ export default function CmsPage({ token, onLogout }: Props) {
       }
     }
 
-    // Subdomain
-    if (subdomainDirty) formData.append('subdomain', JSON.stringify({ subdomain: subdomainValue }))
-
-    // Custom Domains
-    if (domainsDirty) {
-      const domOps: Record<string, unknown>[] = []
-      for (const d of domains) {
-        if (d.isNew) domOps.push({ action: 'create', domain_name: d.domain_name })
-      }
-      for (const d of domains) {
-        if (d.id && !d.isNew) {
-          const orig = domainsOriginal.find(o => o.id === d.id)
-          if (orig && (orig.domain_name !== d.domain_name || orig.is_active !== d.is_active)) {
-            domOps.push({ action: 'update', id: d.id, domain_name: d.domain_name, is_active: d.is_active })
-          }
-        }
-      }
-      for (const id of deletedDomainIds) domOps.push({ action: 'delete', id })
-      if (domOps.length > 0) formData.append('domains', JSON.stringify(domOps))
-    }
-
     try {
       const result = await saveDraft(token, formData)
-      if (result.errors && Object.keys(result.errors).length > 0) {
-        const errMsgs = Object.entries(result.errors).map(([k, v]) => `${k}: ${v}`).join(', ')
-        setMessage({ type: 'error', text: `บางส่วนบันทึกไม่สำเร็จ: ${errMsgs}` })
-      } else {
-        setMessage({ type: 'success', text: 'บันทึกฉบับร่างสำเร็จ!' })
+
+      const newSectionErrors: Partial<Record<SectionKey, string>> = {}
+      const autoOpen: Partial<Record<SectionKey, boolean>> = {}
+      const failedLabels: string[] = []
+      for (const { key, sections, label } of SAVE_RESULT_SECTIONS) {
+        const errMsg = result?.[key]?.error
+        if (errMsg) {
+          for (const sec of sections) {
+            newSectionErrors[sec] = errMsg
+            autoOpen[sec] = true
+          }
+          failedLabels.push(label)
+        }
       }
+
+      if (failedLabels.length > 0) {
+        setMessage({ type: 'error', text: `บันทึกไม่สำเร็จ ${failedLabels.length} ส่วน: ${failedLabels.join(', ')}` })
+        await loadAll()
+        setSectionErrors(newSectionErrors)
+        setOpenSections(prev => ({ ...prev, ...autoOpen }))
+        return false
+      }
+
       await loadAll()
+      return true
     } catch (err) {
-      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return false }
       setMessage({ type: 'error', text: 'เกิดข้อผิดพลาด ไม่สามารถบันทึกได้' })
+      return false
     }
+  }
+
+  const handleSaveDraft = async () => {
+    if (!anyDirty) { setMessage({ type: 'error', text: 'ไม่มีการเปลี่ยนแปลง' }); return }
+    setSaving(true)
+    setMessage({ type: '', text: '' })
+    const ok = await runSaveDraft()
+    if (ok) setMessage({ type: 'success', text: 'บันทึกฉบับร่างสำเร็จ!' })
     setSaving(false)
   }
 
@@ -426,6 +484,14 @@ export default function CmsPage({ token, onLogout }: Props) {
     if (logoPreview?.startsWith('blob:')) URL.revokeObjectURL(logoPreview)
     setLogoFile(file)
     setLogoPreview(URL.createObjectURL(file))
+    setRemoveLogo(false)
+  }
+
+  const handleRemoveLogo = () => {
+    if (logoPreview?.startsWith('blob:')) URL.revokeObjectURL(logoPreview)
+    setLogoFile(null)
+    setLogoPreview(null)
+    setRemoveLogo(true)
   }
 
   const updateInfo = (field: string, value: string) => setInfoForm(prev => ({ ...prev, [field]: value }))
@@ -557,23 +623,116 @@ export default function CmsPage({ token, onLogout }: Props) {
     setSeoRemoveImage(true)
   }
 
-  // Domain handlers
-  const addDomain = () => {
-    if (domains.length >= 3) return
-    setDomains(prev => [...prev, { domain_name: '', is_active: true, isNew: true }])
-    setDomainsDirty(true)
+  // ========== Publish ==========
+  // Option A: if there are unsaved changes, save draft first.
+  // If save draft has section errors → stop (don't publish). Otherwise → publish.
+  const handlePublish = async () => {
+    setPublishing(true)
+    setMessage({ type: '', text: '' })
+
+    if (anyDirty) {
+      setSaving(true)
+      const ok = await runSaveDraft()
+      setSaving(false)
+      if (!ok) {
+        setPublishing(false)
+        return
+      }
+      // clear "save success" message before showing publish result
+      setMessage({ type: '', text: '' })
+    }
+
+    try {
+      await publishCMS(token)
+      setMessage({ type: 'success', text: 'เผยแพร่เว็บไซต์สำเร็จ!' })
+    } catch (err) {
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      if (err instanceof ApiError && err.details) {
+        const msgs = Object.values(err.details).join(' | ')
+        setMessage({ type: 'error', text: msgs })
+      } else {
+        setMessage({ type: 'error', text: 'ไม่สามารถเผยแพร่ได้' })
+      }
+    }
+    setPublishing(false)
   }
 
-  const removeDomain = (index: number) => {
-    const d = domains[index]
-    if (d.id) setDeletedDomainIds(prev => [...prev, d.id!])
-    setDomains(prev => prev.filter((_, i) => i !== index))
-    setDomainsDirty(true)
+  // ========== Subdomain standalone handler ==========
+  const handleSaveSubdomain = async () => {
+    if (!subdomainValue.trim()) { setMessage({ type: 'error', text: 'กรุณากรอก Subdomain' }); return }
+    setSubdomainSaving(true)
+    try {
+      await saveSubdomain(token, subdomainValue.trim())
+      setMessage({ type: 'success', text: 'บันทึก Subdomain สำเร็จ!' })
+    } catch (err) {
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'ไม่สามารถบันทึก Subdomain ได้' })
+    }
+    setSubdomainSaving(false)
   }
 
-  const updateDomainItem = (index: number, updates: Partial<DomainItem>) => {
-    setDomains(prev => prev.map((d, i) => i === index ? { ...d, ...updates } : d))
-    setDomainsDirty(true)
+  // ========== Domain standalone handlers ==========
+  const handleAddDomain = async () => {
+    if (!newDomainName.trim()) return
+    setDomainActionId('adding')
+    try {
+      const res = await createDomain(token, newDomainName.trim())
+      if (res) {
+        setDomains(prev => [...prev, { id: res.id, domain_name: res.domain_name, is_active: res.is_active }])
+        setNewDomainName('')
+        setMessage({ type: 'success', text: 'เพิ่ม Domain สำเร็จ!' })
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'ไม่สามารถเพิ่ม Domain ได้' })
+    }
+    setDomainActionId(null)
+  }
+
+  const handleToggleDomain = async (id: string, isActive: boolean) => {
+    setDomainActionId(id)
+    try {
+      const res = await updateDomain(token, id, { is_active: isActive })
+      if (res) {
+        setDomains(prev => prev.map(d => d.id === id ? { ...d, is_active: isActive } : d))
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'ไม่สามารถอัปเดต Domain ได้' })
+    }
+    setDomainActionId(null)
+  }
+
+  const handleDeleteDomain = async (id: string) => {
+    setDomainActionId(id)
+    try {
+      const ok = await deleteDomain(token, id)
+      if (ok) {
+        setDomains(prev => prev.filter(d => d.id !== id))
+        setMessage({ type: 'success', text: 'ลบ Domain สำเร็จ!' })
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'ไม่สามารถลบ Domain ได้' })
+    }
+    setDomainActionId(null)
+  }
+
+  const handleSaveEditDomain = async () => {
+    if (!editingDomainId || !editingDomainName.trim()) return
+    setDomainActionId(editingDomainId)
+    try {
+      const res = await updateDomain(token, editingDomainId, { domain_name: editingDomainName.trim() })
+      if (res) {
+        setDomains(prev => prev.map(d => d.id === editingDomainId ? { ...d, domain_name: editingDomainName.trim() } : d))
+        setEditingDomainId(null)
+        setEditingDomainName('')
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === 'unauthorized') { onLogout(); return }
+      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'ไม่สามารถแก้ไข Domain ได้' })
+    }
+    setDomainActionId(null)
   }
 
   // ========== Preview ==========
@@ -640,29 +799,6 @@ export default function CmsPage({ token, onLogout }: Props) {
       </div>
     </div>
 
-    {/* Domain list below phone */}
-    {(subdomainValue || domains.length > 0) && (
-      <div className="preview-domains">
-        <div className="preview-domains-title">Domains</div>
-        {subdomainValue && (
-          <div className="preview-domain-item">
-            <span className="preview-domain-icon">🌐</span>
-            <span className="preview-domain-name">{subdomainValue}.nerdbase.cloud</span>
-            <span className="preview-domain-badge subdomain">Subdomain</span>
-          </div>
-        )}
-        {domains.map((d, i) => (
-          <div key={d.id || `d-${i}`} className={`preview-domain-item ${!d.is_active ? 'inactive' : ''}`}>
-            <span className="preview-domain-icon">🔗</span>
-            <span className="preview-domain-name">{d.domain_name || '(ยังไม่ระบุ)'}</span>
-            <span className={`preview-domain-badge ${d.is_active ? 'active' : 'inactive-badge'}`}>
-              {d.is_active ? 'Active' : 'Inactive'}
-            </span>
-            {d.isNew && <span className="preview-domain-badge new">ใหม่</span>}
-          </div>
-        ))}
-      </div>
-    )}
     </>
   )
 
@@ -730,8 +866,12 @@ export default function CmsPage({ token, onLogout }: Props) {
       <input ref={logoInputRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
         style={{ display: 'none' }} onChange={e => { handleLogoFile(e.target.files?.[0] || null); e.target.value = '' }} />
       {logoPreview && (
-        <button className="btn-sm btn-outline" style={{ marginTop: 8 }} onClick={() => logoInputRef.current?.click()}>เปลี่ยนรูป</button>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="btn-sm btn-outline" onClick={() => logoInputRef.current?.click()}>เปลี่ยนรูป</button>
+          <button className="btn-sm btn-danger" onClick={handleRemoveLogo}>ลบโลโก้</button>
+        </div>
       )}
+      {removeLogo && <div className="msg-warning" style={{ marginTop: 8 }}>โลโก้จะถูกลบเมื่อบันทึก</div>}
     </div>
   )
 
@@ -902,49 +1042,178 @@ export default function CmsPage({ token, onLogout }: Props) {
 
   const renderSubdomainSection = () => (
     <div className="section-body">
-      <div className="field-group">
-        <label className="field-label">Subdomain</label>
-        <input className="input" value={subdomainValue}
-          onChange={e => setSubdomainValue(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-          placeholder="my-shop" maxLength={63}
-        />
-        <p className="hint">ใช้ตัวพิมพ์เล็ก ตัวเลข และขีดกลางเท่านั้น (3-63 ตัวอักษร)</p>
+      {/* Warning banner */}
+      <div className="sd-alert-warning">
+        <span className="sd-alert-icon">💡</span>
+        <div>
+          <strong>สิ่งที่ควรรู้เกี่ยวกับการเปลี่ยน Subdomain</strong>
+          <p>การเปลี่ยน Subdomain จะมีผลทันที - URL เดิมจะใช้งานไม่ได้แล้ว ลิงก์ที่แชร์ไว้ก่อนหน้านี้จะไม่สามารถเข้าถึงได้ หากมีผู้เข้าชมเว็บไซต์ของคุณอยู่แล้ว ควรแจ้ง URL ใหม่ให้ทราบด้วย</p>
+        </div>
       </div>
+
+      {/* Info box */}
+      <div className="sd-info-box">
+        <div className="sd-info-title">
+          <span className="sd-info-icon">ℹ</span>
+          <strong>เกี่ยวกับ Platform Subdomain</strong>
+        </div>
+        <ul className="sd-info-list">
+          <li>ใช้งานได้ฟรีไม่ต้องตั้งค่า DNS</li>
+          <li>รองรับ HTTPS อัตโนมัติ (SSL Certificate)</li>
+          <li>เปลี่ยนชื่อ Subdomain ได้ตลอดเวลา</li>
+        </ul>
+      </div>
+
+      {/* Current URL */}
+      {subdomainFullUrl && (
+        <div className="sd-url-box">
+          <span className="sd-url-label">URL ปัจจุบันของเว็บไซต์</span>
+          <div className="sd-url-row">
+            <span className="sd-url-value">{subdomainFullUrl}</span>
+            <button
+              className="sd-copy-btn"
+              title="คัดลอก URL"
+              onClick={() => navigator.clipboard.writeText(subdomainFullUrl)}
+            >
+              ⧉
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Input */}
+      <div className="field-group">
+        <label className="field-label">Subdomain <span className="required">*</span></label>
+        <input
+          className="input"
+          value={subdomainValue}
+          onChange={e => setSubdomainValue(e.target.value)}
+          maxLength={100}
+          placeholder="my-shop"
+        />
+        <ul className="sd-hint-list">
+          <li>อนุญาตเฉพาะตัวอักษรภาษาอังกฤษ a-z, A-Z, ตัวเลข 0-9, ขีดกลาง (-) และจุด (.) เท่านั้น</li>
+          <li>ความยาวสูงสุด 100 ตัวอักษร</li>
+          <li>ต้องขึ้นต้นและลงท้ายด้วยตัวอักษรหรือตัวเลข (ห้ามขึ้นต้น/ลงท้ายด้วย - หรือ .)</li>
+          <li>ห้ามใส่ space อย่างเดียว ต้องมีตัวอักษรผสมเสมอ</li>
+        </ul>
+      </div>
+
+      <button
+        className="btn-sm btn-primary"
+        onClick={handleSaveSubdomain}
+        disabled={subdomainSaving || !subdomainValue.trim()}
+      >
+        {subdomainSaving ? 'กำลังบันทึก...' : 'บันทึก Subdomain'}
+      </button>
     </div>
   )
 
+  const MAX_DOMAINS = 3
+
   const renderDomainsSection = () => (
     <div className="section-body">
-      {domains.length === 0 && deletedDomainIds.length === 0 ? (
-        <div className="empty-state">
-          <p>ยังไม่มี Custom Domain</p>
-          <button className="btn-sm btn-outline" onClick={addDomain}>+ เพิ่ม Domain</button>
+      {/* How-to info box */}
+      <div className="sd-info-box">
+        <div className="sd-info-title">
+          <span className="sd-info-icon">💡</span>
+          <strong>วิธีเชื่อมต่อ</strong>
         </div>
-      ) : (
-        <>
-          {domains.map((d, index) => (
-            <div key={d.id || `new-${index}`} className="domain-row">
-              <input className="input" value={d.domain_name}
-                onChange={e => updateDomainItem(index, { domain_name: e.target.value })}
-                placeholder="example.com" disabled={!!d.id && !d.isNew}
-              />
-              <label className="toggle-label">
-                <input type="checkbox" checked={d.is_active}
-                  onChange={e => updateDomainItem(index, { is_active: e.target.checked })} />
-                <span>Active</span>
-              </label>
-              <button className="btn-sm btn-danger" onClick={() => removeDomain(index)}>ลบ</button>
-              {d.isNew && <span className="badge-new">ใหม่</span>}
-            </div>
-          ))}
-          {domains.length < 3 && (
-            <button className="btn-sm btn-outline" onClick={addDomain} style={{ marginTop: 8 }}>+ เพิ่ม Domain</button>
-          )}
-        </>
+        <p className="sd-info-text">
+          เข้าไปที่เว็บไซต์ผู้ให้บริการโดเมนของคุณ (เช่น GoDaddy หรือ Namecheap) จากนั้นเพิ่ม CNAME Record
+          โดยกำหนดค่าให้ชี้ไปที่ <strong>{subdomainBaseDomain || 'platform.example.com'}</strong>
+        </p>
+      </div>
+
+      {/* Add domain input */}
+      <div className="field-group">
+        <label className="field-label">Custom Domain</label>
+        <div className="domain-add-row">
+          <input
+            className="input"
+            value={newDomainName}
+            onChange={e => setNewDomainName(e.target.value)}
+            placeholder="example.com"
+            maxLength={253}
+            disabled={domains.length >= MAX_DOMAINS}
+            onKeyDown={e => e.key === 'Enter' && handleAddDomain()}
+          />
+        </div>
+        {domains.length >= MAX_DOMAINS && (
+          <div className="sd-limit-notice">
+            <span>ⓘ</span> จำกัดการเพิ่มโดเมนสูงสุด {MAX_DOMAINS} โดเมน
+          </div>
+        )}
+      </div>
+
+      {/* Domains table */}
+      {domains.length > 0 && (
+        <table className="domains-table">
+          <thead>
+            <tr>
+              <th>โดเมน</th>
+              <th>สถานะ (เปิด/ปิด)</th>
+              <th>จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {domains.map(dom => (
+              <tr key={dom.id}>
+                <td>
+                  {editingDomainId === dom.id ? (
+                    <input
+                      className="input input-sm"
+                      value={editingDomainName}
+                      onChange={e => setEditingDomainName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleSaveEditDomain(); if (e.key === 'Escape') { setEditingDomainId(null); setEditingDomainName('') } }}
+                      autoFocus
+                    />
+                  ) : (
+                    <span className="domain-name">{dom.domain_name}</span>
+                  )}
+                </td>
+                <td>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={dom.is_active}
+                      disabled={domainActionId === dom.id}
+                      onChange={e => handleToggleDomain(dom.id, e.target.checked)}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </td>
+                <td>
+                  <div className="domain-actions">
+                    {editingDomainId === dom.id ? (
+                      <>
+                        <button className="icon-btn icon-btn-save" title="บันทึก" onClick={handleSaveEditDomain} disabled={domainActionId === dom.id}>✓</button>
+                        <button className="icon-btn" title="ยกเลิก" onClick={() => { setEditingDomainId(null); setEditingDomainName('') }}>✕</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="icon-btn" title="แก้ไข" onClick={() => { setEditingDomainId(dom.id); setEditingDomainName(dom.domain_name) }} disabled={domainActionId === dom.id}>✎</button>
+                        <button className="icon-btn icon-btn-danger" title="ลบ" onClick={() => handleDeleteDomain(dom.id)} disabled={domainActionId === dom.id}>🗑</button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
-      {deletedDomainIds.length > 0 && (
-        <div className="msg-warning">{deletedDomainIds.length} domain จะถูกลบเมื่อบันทึก</div>
-      )}
+
+      {/* Add button */}
+      <div className="domain-add-actions">
+        <button
+          className="btn-sm btn-primary"
+          onClick={handleAddDomain}
+          disabled={domainActionId === 'adding' || !newDomainName.trim() || domains.length >= MAX_DOMAINS}
+        >
+          {domainActionId === 'adding' ? 'กำลังเพิ่ม...' : 'เพิ่มโดเมน'}
+        </button>
+      </div>
     </div>
   )
 
@@ -982,6 +1251,9 @@ export default function CmsPage({ token, onLogout }: Props) {
           <button className="btn-header btn-save" onClick={handleSaveDraft} disabled={saving || !anyDirty}>
             {saving ? 'กำลังบันทึก...' : 'บันทึกฉบับร่าง'}
           </button>
+          <button className="btn-header btn-publish" onClick={handlePublish} disabled={publishing || saving}>
+            {publishing ? 'กำลังเผยแพร่...' : 'เผยแพร่'}
+          </button>
         </div>
       </header>
 
@@ -1010,9 +1282,26 @@ export default function CmsPage({ token, onLogout }: Props) {
               <button className="sidebar-section-toggle" onClick={() => toggleSection(key)}>
                 <span className={`arrow ${openSections[key] ? 'open' : ''}`}>&#9656;</span>
                 <span className="sidebar-section-label">{SECTION_LABELS[key]}</span>
+                {REQUIRED_SECTIONS[key] && !sectionComplete[key] && (
+                  <span className="section-required" title="จำเป็นต้องกรอก">!</span>
+                )}
+                {REQUIRED_SECTIONS[key] && sectionComplete[key] && !sectionErrors[key] && (
+                  <span className="section-complete" title="กรอกข้อมูลแล้ว">✓</span>
+                )}
                 {sectionDirty[key] && <span className="dirty-dot" />}
+                {sectionErrors[key] && <span className="error-dot" title={sectionErrors[key]} />}
               </button>
-              {openSections[key] && sectionRenderers[key]()}
+              {openSections[key] && (
+                <>
+                  {sectionErrors[key] && (
+                    <div className="section-error-banner">
+                      <span className="section-error-icon">⚠</span>
+                      {sectionErrors[key]}
+                    </div>
+                  )}
+                  {sectionRenderers[key]()}
+                </>
+              )}
             </div>
           ))}
         </div>

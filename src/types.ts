@@ -190,3 +190,32 @@ export interface DraftResponse {
   subdomain: SubdomainResponse | null
   domains: DomainResponse[]
 }
+
+// SectionResult — each field in SaveDraftResponse has this shape.
+// data non-null = success, error non-null = failed, both null = section not submitted.
+export interface SectionResult<T> {
+  data: T | null
+  error: string | null
+}
+
+export interface BulkBannersData {
+  data: BannerResponse[]
+  total: number
+}
+
+export interface BulkBannerFootersData {
+  data: BannerFooterResponse[]
+  total: number
+}
+
+export interface SaveDraftResponse {
+  logo: SectionResult<BusinessLogoResponse>
+  branding: SectionResult<BrandingData>
+  info: SectionResult<BusinessInfoResponse>
+  banners: SectionResult<BulkBannersData>
+  banner_footers: SectionResult<BulkBannerFootersData>
+  seo: SectionResult<SEOResponse>
+  line_contact: SectionResult<LineContactResponse>
+  facebook_page: SectionResult<FacebookPageResponse>
+  subdomain: SectionResult<SubdomainResponse>
+}
